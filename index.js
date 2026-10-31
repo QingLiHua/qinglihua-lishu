@@ -490,14 +490,20 @@ function clearAddForm() {
     }
 }
 
+function setFormMode(mode = null) {
+    const isEditing = mode === 'add' || mode === 'edit';
+    document.getElementById('qsh-add-form')?.classList.toggle('qsh-hidden', mode !== 'add');
+    document.getElementById('qsh-edit-form')?.classList.toggle('qsh-hidden', mode !== 'edit');
+    document.getElementById('qsh-toolbar')?.classList.toggle('qsh-hidden', isEditing);
+    document.getElementById('qsh-station-list')?.classList.toggle('qsh-hidden', isEditing);
+    document.getElementById('qsh-status')?.classList.toggle('qsh-hidden', isEditing);
+    document.getElementById('qsh-search-empty')?.classList.add('qsh-hidden');
+    document.querySelector('.qsh-dialog')?.classList.toggle('qsh-editor-open', isEditing);
+    if (!isEditing) filterCards();
+}
+
 function showAddForm(show) {
-    const form = document.getElementById('qsh-add-form');
-    const editForm = document.getElementById('qsh-edit-form');
-    const addButton = document.getElementById('qsh-show-add');
-    if (!form) return;
-    form.classList.toggle('qsh-hidden', !show);
-    editForm?.classList.add('qsh-hidden');
-    addButton?.classList.toggle('qsh-hidden', show);
+    setFormMode(show ? 'add' : null);
     if (show) document.getElementById('qsh-station-name')?.focus();
 }
 
@@ -621,6 +627,7 @@ async function addStation(event) {
         if (!(switchNow instanceof HTMLInputElement) || switchNow.checked) {
             await switchToProfile(created[0].id);
         }
+        revealStation(stationId);
     } catch (error) {
         console.error('[Lishu Model Hub] 添加失败', error);
         notify('error', error?.message || '保存站子失败。');
@@ -711,9 +718,7 @@ function showEditStationForm(stationId) {
     const form = document.getElementById('qsh-edit-form');
     if (!group || !(form instanceof HTMLFormElement)) return;
 
-    showAddForm(false);
-    form.classList.remove('qsh-hidden');
-    document.getElementById('qsh-show-add')?.classList.add('qsh-hidden');
+    setFormMode('edit');
     const values = {
         'qsh-edit-station-id': group.id,
         'qsh-edit-station-name': group.name,
@@ -731,8 +736,70 @@ function showEditStationForm(stationId) {
 
 function hideEditStationForm() {
     const form = document.getElementById('qsh-edit-form');
-    form?.classList.add('qsh-hidden');
-    document.getElementById('qsh-show-add')?.classList.remove('qsh-hidden');
+    if (form && !form.classList.contains('qsh-hidden')) setFormMode(null);
+}
+
+function showPlazaDialog(stationId) {
+    const group = findStationGroup(stationId);
+    const sheet = document.getElementById('qsh-plaza-sheet');
+    const stationField = document.getElementById('qsh-plaza-station-id');
+    const input = document.getElementById('qsh-plaza-url');
+    if (!group || !sheet || !(stationField instanceof HTMLInputElement) || !(input instanceof HTMLInputElement)) return;
+
+    stationField.value = group.id;
+    input.value = group.modelPlazaUrl || '';
+    const name = document.getElementById('qsh-plaza-station-name');
+    if (name) name.textContent = group.name;
+    sheet.classList.remove('qsh-hidden');
+    requestAnimationFrame(() => input.focus());
+}
+
+function hidePlazaDialog() {
+    document.getElementById('qsh-plaza-sheet')?.classList.add('qsh-hidden');
+    const input = document.getElementById('qsh-plaza-url');
+    if (input instanceof HTMLInputElement) input.value = '';
+}
+
+function revealStation(stationId) {
+    requestAnimationFrame(() => {
+        const card = [...document.querySelectorAll('.qsh-card')]
+            .find(item => item instanceof HTMLElement && item.dataset.stationId === stationId);
+        card?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    });
+}
+
+async function saveModelPlaza(event) {
+    event.preventDefault();
+    const context = getContext();
+    const stationId = String(document.getElementById('qsh-plaza-station-id')?.value || '');
+    const group = findStationGroup(stationId);
+    const modelPlazaUrl = normalizeEndpoint(document.getElementById('qsh-plaza-url')?.value || '');
+    if (!context || !group) return;
+    if (!isHttpEndpoint(modelPlazaUrl)) {
+        notify('warning', '模型广场链接要以 http:// 或 https:// 开头。');
+        document.getElementById('qsh-plaza-url')?.focus();
+        return;
+    }
+
+    const saveButton = document.getElementById('qsh-save-plaza');
+    if (saveButton instanceof HTMLButtonElement) saveButton.disabled = true;
+    try {
+        for (const profile of group.profiles) {
+            profile.qingliModelPlazaUrl = modelPlazaUrl;
+            await context.eventSource.emit(context.eventTypes.CONNECTION_PROFILE_UPDATED, profile);
+        }
+        getStationMeta(group.id).modelPlazaUrl = modelPlazaUrl;
+        context.saveSettingsDebounced();
+        hidePlazaDialog();
+        render();
+        revealStation(group.id);
+        notify('success', `已保存 ${group.name} 的模型广场`);
+    } catch (error) {
+        console.error('[Lishu Model Hub] 保存模型广场失败', error);
+        notify('error', error?.message || '保存模型广场失败。');
+    } finally {
+        if (saveButton instanceof HTMLButtonElement) saveButton.disabled = false;
+    }
 }
 
 async function editStation(event) {
@@ -790,6 +857,7 @@ async function editStation(event) {
         }
         hideEditStationForm();
         render();
+        revealStation(group.id);
         notify('success', '站子配置已经更新');
     } catch (error) {
         console.error('[Lishu Model Hub] 编辑站子失败', error);
@@ -829,6 +897,7 @@ function createCard(group, currentProfileId) {
     const card = document.createElement('article');
     const isCurrentStation = group.profiles.some(profile => profile.id === currentProfileId);
     card.className = `qsh-card${group.favorite ? ' qsh-favorite' : ''}${isCurrentStation ? ' qsh-current-station' : ''}`;
+    card.dataset.stationId = group.id;
     card.dataset.search = [group.name, group.endpoint, ...group.profiles.flatMap(p => [p.name, p.model])]
         .filter(Boolean)
         .join(' ')
@@ -962,7 +1031,7 @@ function createCard(group, currentProfileId) {
         : '<i class="fa-solid fa-link"></i><span>设置广场</span>';
     plazaButton.addEventListener('click', () => {
         if (group.modelPlazaUrl) openExternal(group.modelPlazaUrl);
-        else showEditStationForm(group.id);
+        else showPlazaDialog(group.id);
     });
 
     const modelAddForm = document.createElement('form');
@@ -1105,6 +1174,7 @@ function closeHub() {
     document.body.classList.remove('qsh-modal-open');
     showAddForm(false);
     hideEditStationForm();
+    hidePlazaDialog();
 }
 
 function modalMarkup() {
@@ -1122,7 +1192,7 @@ function modalMarkup() {
                     </button>
                 </header>
 
-                <div class="qsh-toolbar">
+                <div id="qsh-toolbar" class="qsh-toolbar">
                     <label class="qsh-search-box">
                         <i class="fa-solid fa-magnifying-glass"></i>
                         <input id="qsh-search" type="search" placeholder="搜索站子或模型" autocomplete="off">
@@ -1202,6 +1272,27 @@ function modalMarkup() {
                         </button>
                     </div>
                 </form>
+
+                <div id="qsh-plaza-sheet" class="qsh-subdialog-backdrop qsh-hidden">
+                    <form id="qsh-plaza-form" class="qsh-subdialog" role="dialog" aria-modal="true" aria-labelledby="qsh-plaza-title">
+                        <input id="qsh-plaza-station-id" type="hidden">
+                        <div class="qsh-subdialog-heading">
+                            <span>MODEL PLAZA</span>
+                            <strong id="qsh-plaza-title">设置模型广场</strong>
+                            <p>给 <b id="qsh-plaza-station-name"></b> 保存一次链接，以后就能直接打开。</p>
+                        </div>
+                        <label class="qsh-subdialog-field">
+                            <span>模型广场链接</span>
+                            <input id="qsh-plaza-url" class="text_pole" type="url" inputmode="url" placeholder="https://example.com/pricing" required>
+                        </label>
+                        <div class="qsh-form-actions qsh-subdialog-actions">
+                            <button id="qsh-cancel-plaza" type="button" class="menu_button">取消</button>
+                            <button id="qsh-save-plaza" type="submit" class="menu_button qsh-primary-button">
+                                <i class="fa-solid fa-link"></i><span>保存链接</span>
+                            </button>
+                        </div>
+                    </form>
+                </div>
 
                 <div id="qsh-status" class="qsh-status" aria-live="polite"></div>
                 <main id="qsh-station-list" class="qsh-station-list"></main>
@@ -1298,6 +1389,11 @@ function bindUi() {
     document.getElementById('qsh-add-form')?.addEventListener('submit', addStation);
     document.getElementById('qsh-cancel-edit')?.addEventListener('click', hideEditStationForm);
     document.getElementById('qsh-edit-form')?.addEventListener('submit', editStation);
+    document.getElementById('qsh-cancel-plaza')?.addEventListener('click', hidePlazaDialog);
+    document.getElementById('qsh-plaza-form')?.addEventListener('submit', saveModelPlaza);
+    document.getElementById('qsh-plaza-sheet')?.addEventListener('click', event => {
+        if (event.target === event.currentTarget) hidePlazaDialog();
+    });
     document.getElementById('qsh-search')?.addEventListener('input', filterCards);
 
     document.getElementById('qsh-close')?.addEventListener('click', event => {
@@ -1315,11 +1411,17 @@ function bindUi() {
         } else {
             showAddForm(false);
             hideEditStationForm();
+            hidePlazaDialog();
         }
     });
 
     document.addEventListener('keydown', event => {
         if (event.key === 'Escape' && overlay?.matches(':popover-open')) {
+            const plazaSheet = document.getElementById('qsh-plaza-sheet');
+            if (plazaSheet && !plazaSheet.classList.contains('qsh-hidden')) {
+                hidePlazaDialog();
+                return;
+            }
             closeHub();
         }
     });
