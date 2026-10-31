@@ -9,6 +9,6 @@
     "js": "index.js",
     "css": "style.css",
     "author": "Qinglihua",
-    "version": "1.3.0",
+    "version": "1.3.1",
     "minimum_client_version": "1.19.0"
 }

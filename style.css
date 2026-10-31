@@ -171,6 +171,19 @@ body.qsh-modal-open { overflow: hidden; }
 }
 .qsh-search-box input::placeholder { color: #98a4b3; }
 
+/* Keep SillyTavern themes from painting a second dark field inside search. */
+.qsh-dialog label.qsh-search-box input#qsh-search {
+    -webkit-appearance: none !important;
+    appearance: none !important;
+    background: none !important;
+    background-color: transparent !important;
+    background-image: none !important;
+    border: 0 !important;
+    border-radius: 0 !important;
+    box-shadow: none !important;
+    filter: none !important;
+}
+
 .qsh-dialog .menu_button,
 .qsh-dialog button.menu_button {
     align-items: center;
