@@ -1,0 +1,14 @@
+{
+    "display_name": "梨枢",
+    "loading_order": 100,
+    "requires": [],
+    "optional": [],
+    "dependencies": [
+        "connection-manager"
+    ],
+    "js": "index.js",
+    "css": "style.css",
+    "author": "Qinglihua",
+    "version": "1.2.0",
+    "minimum_client_version": "1.19.0"
+}
