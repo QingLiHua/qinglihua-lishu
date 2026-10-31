@@ -4,7 +4,7 @@
 
 一个为 SillyTavern 设计的多站点、多模型快捷管理扩展。把常用站子、模型与模型广场集中到同一个面板里，电脑和手机都能快速切换。
 
-> 当前版本：`1.3.3` · 适用于 SillyTavern `1.19.0+`
+> 当前版本：`1.3.4` · 适用于 SillyTavern `1.18.0+`
 
 ## 主要功能
 
@@ -77,7 +77,7 @@ qinglihua-lishu/
 
 ## 依赖与兼容性
 
-- SillyTavern `1.19.0+`
+- SillyTavern `1.18.0+`
 - 需要启用 SillyTavern 内置的 `Connection Profiles`
 - 支持桌面端与移动端浏览器；不同浏览器版本的外观可能略有差异
 
