@@ -311,7 +311,12 @@ function usageSummary(stationId) {
     const totalText = total.totalTokens
         ? `累计 ${total.calls || 0} 次 · ${formatTokens(total.totalTokens)} tokens`
         : `累计 ${total.calls || 0} 次`;
-    return { todayText, totalText };
+    return {
+        todayText,
+        totalText,
+        todayCalls: String(today.calls || 0),
+        todayTokens: today.totalTokens ? formatTokens(today.totalTokens) : '0',
+    };
 }
 
 function openExternal(url) {
@@ -853,17 +858,15 @@ function createCard(group, currentProfileId) {
     endpoint.title = group.endpoint || '';
     identity.append(titleRow, endpoint);
 
-    const headerSide = document.createElement('div');
-    headerSide.className = 'qsh-card-header-side';
     const usage = usageSummary(group.id);
     const balance = document.createElement('button');
     balance.type = 'button';
-    balance.className = 'qsh-balance';
+    balance.className = 'qsh-stat qsh-stat-button qsh-balance';
     balance.title = group.balance == null
         ? `${usage.totalText}。该站暂未提供可用的余额接口，点击前往控制台查看。`
         : `${usage.totalText}。点击前往站子控制台。`;
     const balanceValue = group.balance == null ? '--' : `${group.balanceUnit}${group.balance}`;
-    balance.innerHTML = `<span>剩余额度</span><strong>${escapeAttribute(balanceValue)}</strong><small>${escapeAttribute(usage.todayText)}</small>`;
+    balance.innerHTML = `<span>剩余额度</span><strong>${escapeAttribute(balanceValue)}</strong>`;
     balance.addEventListener('click', () => {
         const dashboardUrl = stationDashboardUrl(group);
         if (!dashboardUrl) {
@@ -908,8 +911,18 @@ function createCard(group, currentProfileId) {
     const headerActions = document.createElement('div');
     headerActions.className = 'qsh-card-header-actions';
     headerActions.append(favorite, menu);
-    headerSide.append(balance, headerActions);
-    header.append(identity, headerSide);
+    header.append(identity, headerActions);
+
+    const stats = document.createElement('div');
+    stats.className = 'qsh-card-stats';
+    const todayCalls = document.createElement('div');
+    todayCalls.className = 'qsh-stat';
+    todayCalls.innerHTML = `<span>今日调用</span><strong>${escapeAttribute(usage.todayCalls)} 次</strong>`;
+    const todayTokens = document.createElement('div');
+    todayTokens.className = 'qsh-stat';
+    todayTokens.title = usage.totalText;
+    todayTokens.innerHTML = `<span>今日用量</span><strong>${escapeAttribute(usage.todayTokens)}</strong><small>tokens</small>`;
+    stats.append(balance, todayCalls, todayTokens);
 
     const controls = document.createElement('div');
     controls.className = 'qsh-card-controls';
@@ -1012,7 +1025,7 @@ function createCard(group, currentProfileId) {
     );
 
     controls.append(select, switchButton, plazaButton);
-    card.append(header, controls, modelAddForm);
+    card.append(header, stats, controls, modelAddForm);
     return card;
 }
 
