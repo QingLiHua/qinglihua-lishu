@@ -1,9 +1,11 @@
+import { getRequestHeaders } from '../../../../script.js';
 import { SECRET_KEYS, writeSecret } from '/scripts/secrets.js';
 
 const MODULE_ID = 'qingliStationHub';
 const NONE_PROFILE_LABEL = '<None>';
 const SWITCH_TIMEOUT_MS = 12_000;
 const ADD_MODEL_VALUE = '__qsh_add_model__';
+const FETCH_MODELS_VALUE = '__qsh_fetch_models__';
 const MAX_SEEN_MESSAGES = 120;
 
 const DEFAULT_SETTINGS = Object.freeze({
@@ -18,6 +20,8 @@ let settings;
 let switching = false;
 let initialized = false;
 let uiObserver;
+let pendingAddSecret = null;
+let fetchedModelsEndpoint = '';
 
 function getContext() {
     return globalThis.SillyTavern?.getContext?.();
@@ -59,6 +63,56 @@ function parseModels(value) {
             .map(model => model.trim())
             .filter(Boolean),
     )];
+}
+
+function extractModelIds(payload) {
+    const candidates = [
+        payload,
+        payload?.data,
+        payload?.models,
+        payload?.data?.data,
+        payload?.data?.models,
+        payload?.result?.data,
+        payload?.result?.models,
+        payload?.response?.data,
+        payload?.response?.models,
+    ];
+    const list = candidates.find(Array.isArray) || [];
+    return [...new Set(list
+        .map(item => typeof item === 'string' ? item : item?.id ?? item?.model ?? item?.name)
+        .map(item => String(item ?? '').trim())
+        .filter(Boolean))]
+        .sort((a, b) => a.localeCompare(b));
+}
+
+async function requestAvailableModels(endpoint, secretId) {
+    const response = await fetch('/api/backends/chat-completions/status', {
+        method: 'POST',
+        headers: getRequestHeaders(),
+        body: JSON.stringify({
+            chat_completion_source: 'custom',
+            custom_url: endpoint,
+            secret_id: secretId,
+        }),
+    });
+    const text = await response.text();
+    let payload = null;
+    try {
+        payload = text ? JSON.parse(text) : null;
+    } catch {
+        payload = null;
+    }
+
+    if (!response.ok) {
+        const reason = payload?.error?.message || payload?.error || payload?.message || text;
+        throw new Error(String(reason || `请求失败（${response.status}）`));
+    }
+
+    const models = extractModelIds(payload);
+    if (!models.length) {
+        throw new Error('这个站子没有返回可用模型列表，请改用手动输入。');
+    }
+    return models;
 }
 
 function endpointKey(profile) {
@@ -488,6 +542,88 @@ function clearAddForm() {
         const field = document.getElementById(id);
         if (field instanceof HTMLInputElement || field instanceof HTMLTextAreaElement) field.value = '';
     }
+    const modelSelect = document.getElementById('qsh-fetched-models');
+    if (modelSelect instanceof HTMLSelectElement) modelSelect.replaceChildren();
+    document.getElementById('qsh-fetched-model-wrap')?.classList.add('qsh-hidden');
+    const apiKeyInput = document.getElementById('qsh-api-key');
+    if (apiKeyInput instanceof HTMLInputElement) {
+        apiKeyInput.placeholder = '新站子必填；同一地址加模型可留空';
+    }
+    pendingAddSecret = null;
+    fetchedModelsEndpoint = '';
+}
+
+function resetFetchedModels() {
+    const modelSelect = document.getElementById('qsh-fetched-models');
+    if (modelSelect instanceof HTMLSelectElement) modelSelect.replaceChildren();
+    document.getElementById('qsh-fetched-model-wrap')?.classList.add('qsh-hidden');
+    fetchedModelsEndpoint = '';
+}
+
+async function fetchModelsForAddForm() {
+    const manager = getConnectionManager();
+    if (!manager) {
+        notify('error', '连接配置管理器还没有加载。');
+        return;
+    }
+
+    const name = String(document.getElementById('qsh-station-name')?.value || '').trim();
+    const endpoint = normalizeEndpoint(document.getElementById('qsh-endpoint')?.value || '');
+    const apiKeyInput = document.getElementById('qsh-api-key');
+    const apiKey = String(apiKeyInput?.value || '').trim();
+    if (!isHttpEndpoint(endpoint)) {
+        notify('warning', '先填写正确的 API 地址。');
+        document.getElementById('qsh-endpoint')?.focus();
+        return;
+    }
+
+    const matchingProfiles = manager.profiles.filter(profile => normalizeEndpoint(profile['api-url']) === endpoint);
+    let secretId = matchingProfiles.find(profile => profile['secret-id'])?.['secret-id'] || null;
+    if (pendingAddSecret?.endpoint === endpoint) secretId = pendingAddSecret.id;
+
+    const button = document.getElementById('qsh-fetch-models');
+    if (button instanceof HTMLButtonElement) {
+        button.disabled = true;
+        button.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i><span>正在拉取…</span>';
+    }
+
+    try {
+        if (apiKey) {
+            secretId = await writeSecret(SECRET_KEYS.CUSTOM, apiKey, name || endpointHost(endpoint));
+            pendingAddSecret = { endpoint, id: secretId };
+            if (apiKeyInput instanceof HTMLInputElement) {
+                apiKeyInput.value = '';
+                apiKeyInput.placeholder = 'Key 已安全保存；如需更换可重新填写';
+            }
+        }
+        if (!secretId) {
+            notify('warning', '新站子需要先填写 API Key 才能拉取模型。');
+            apiKeyInput?.focus();
+            return;
+        }
+
+        const models = await requestAvailableModels(endpoint, secretId);
+        const select = document.getElementById('qsh-fetched-models');
+        if (!(select instanceof HTMLSelectElement)) return;
+        select.replaceChildren(...models.map(model => {
+            const option = document.createElement('option');
+            option.value = model;
+            option.textContent = model;
+            return option;
+        }));
+        fetchedModelsEndpoint = endpoint;
+        document.getElementById('qsh-fetched-model-wrap')?.classList.remove('qsh-hidden');
+        notify('success', `已拉取 ${models.length} 个模型`);
+    } catch (error) {
+        console.error('[Lishu Model Hub] 拉取模型失败', error);
+        resetFetchedModels();
+        notify('error', error?.message || '拉取模型失败，请手动填写模型 ID。');
+    } finally {
+        if (button instanceof HTMLButtonElement) {
+            button.disabled = false;
+            button.innerHTML = '<i class="fa-solid fa-cloud-arrow-down"></i><span>拉取可用模型</span>';
+        }
+    }
 }
 
 function setFormMode(mode = null) {
@@ -520,7 +656,14 @@ async function addStation(event) {
     const name = String(document.getElementById('qsh-station-name')?.value || '').trim();
     const endpoint = normalizeEndpoint(document.getElementById('qsh-endpoint')?.value || '');
     const apiKey = String(document.getElementById('qsh-api-key')?.value || '').trim();
-    const models = parseModels(document.getElementById('qsh-models')?.value || '');
+    const fetchedSelect = document.getElementById('qsh-fetched-models');
+    const fetchedModels = fetchedModelsEndpoint === endpoint && fetchedSelect instanceof HTMLSelectElement
+        ? [...fetchedSelect.options].map(option => String(option.value || '').trim()).filter(Boolean)
+        : [];
+    const models = [...new Set([
+        ...fetchedModels,
+        ...parseModels(document.getElementById('qsh-models')?.value || ''),
+    ])];
     const modelPlazaUrl = normalizeEndpoint(document.getElementById('qsh-model-plaza-url')?.value || '');
 
     if (!name) {
@@ -534,8 +677,8 @@ async function addStation(event) {
         return;
     }
     if (!models.length) {
-        notify('warning', '至少填一个模型 ID。');
-        document.getElementById('qsh-models')?.focus();
+        notify('warning', '请先拉取并选择模型，或手动填写一个模型 ID。');
+        document.getElementById('qsh-fetch-models')?.focus();
         return;
     }
     if (modelPlazaUrl && !isHttpEndpoint(modelPlazaUrl)) {
@@ -546,6 +689,7 @@ async function addStation(event) {
 
     const matchingProfiles = manager.profiles.filter(profile => normalizeEndpoint(profile['api-url']) === endpoint);
     let secretId = matchingProfiles.find(profile => profile['secret-id'])?.['secret-id'] || null;
+    if (pendingAddSecret?.endpoint === endpoint) secretId = pendingAddSecret.id;
 
     const saveButton = document.getElementById('qsh-save-station');
     if (saveButton instanceof HTMLButtonElement) saveButton.disabled = true;
@@ -684,6 +828,65 @@ async function addModelToStation(stationId, rawModel) {
     notify('success', `已保存模型 ${model}`);
     await switchToProfile(profile.id);
     return true;
+}
+
+async function syncModelsForStation(stationId) {
+    const context = getContext();
+    const manager = getConnectionManager();
+    const group = findStationGroup(stationId);
+    if (!context || !manager || !group) return false;
+
+    const source = group.profiles.find(profile => profile['secret-id']) || group.profiles[0];
+    if (!source?.['secret-id']) {
+        notify('warning', '这个站子还没有保存 API Key，请先在“编辑站子”里补上。');
+        return false;
+    }
+
+    try {
+        const models = await requestAvailableModels(group.endpoint, source['secret-id']);
+        const existingModels = new Set(group.profiles.map(modelLabel));
+        const created = [];
+
+        for (const model of models) {
+            if (existingModels.has(model)) continue;
+
+            const profile = {
+                ...source,
+                id: context.uuidv4(),
+                name: uniqueProfileName(`${group.name} · ${model}`, manager.profiles),
+                model,
+                exclude: Array.isArray(source.exclude) ? [...source.exclude] : [],
+                qingliStationId: group.id,
+                qingliStationName: group.name,
+                qingliModelPlazaUrl: group.modelPlazaUrl || '',
+            };
+            manager.profiles.push(profile);
+            created.push(profile);
+            existingModels.add(model);
+        }
+
+        if (created.length) {
+            context.saveSettingsDebounced();
+            syncNativeProfileSelect();
+            for (const profile of created) {
+                await context.eventSource.emit(context.eventTypes.CONNECTION_PROFILE_CREATED, profile);
+            }
+        }
+
+        render();
+        revealStation(group.id);
+        notify(
+            created.length ? 'success' : 'info',
+            created.length
+                ? `已从站子同步，新增 ${created.length} 个模型。`
+                : `模型已经是最新的，共 ${models.length} 个。`,
+        );
+        return true;
+    } catch (error) {
+        console.error('[Lishu Model Hub] 拉取站子模型失败', error);
+        notify('error', error?.message || '拉取模型失败，请检查地址和 API Key。');
+        return false;
+    }
 }
 
 async function renameStation(stationId) {
@@ -1007,10 +1210,13 @@ function createCard(group, currentProfileId) {
         select.append(option);
     }
 
+    const fetchModelsOption = document.createElement('option');
+    fetchModelsOption.value = FETCH_MODELS_VALUE;
+    fetchModelsOption.textContent = '↻ 拉取站子模型…';
     const addModelOption = document.createElement('option');
     addModelOption.value = ADD_MODEL_VALUE;
     addModelOption.textContent = '＋ 新增模型…';
-    select.append(addModelOption);
+    select.append(fetchModelsOption, addModelOption);
 
     if (!group.profiles.some(profile => profile.id === currentProfileId)) {
         select.selectedIndex = 0;
@@ -1074,7 +1280,14 @@ function createCard(group, currentProfileId) {
         switchButton.classList.toggle('qsh-current-button', isCurrent);
         switchButton.querySelector('span').textContent = isCurrent ? '当前' : '切换';
     };
-    select.addEventListener('change', () => {
+    select.addEventListener('change', async () => {
+        if (select.value === FETCH_MODELS_VALUE) {
+            select.value = selectedProfileId;
+            select.disabled = true;
+            switchButton.disabled = true;
+            await syncModelsForStation(group.id);
+            return;
+        }
         if (select.value === ADD_MODEL_VALUE) {
             select.value = selectedProfileId;
             modelAddForm.classList.remove('qsh-hidden');
@@ -1224,9 +1437,19 @@ function modalMarkup() {
                             <span>API Key</span>
                             <input id="qsh-api-key" class="text_pole" type="password" placeholder="新站子必填；同一地址加模型可留空" autocomplete="new-password">
                         </label>
+                        <div class="qsh-wide-field qsh-model-fetch-row">
+                            <button id="qsh-fetch-models" type="button" class="menu_button qsh-fetch-models-button">
+                                <i class="fa-solid fa-cloud-arrow-down"></i><span>拉取可用模型</span>
+                            </button>
+                            <span>将通过酒馆安全读取该站支持的模型，不会在梨枢中保存明文 Key。</span>
+                        </div>
+                        <label id="qsh-fetched-model-wrap" class="qsh-wide-field qsh-hidden">
+                            <span>已拉取模型（保存时会全部加入）</span>
+                            <select id="qsh-fetched-models" class="text_pole"></select>
+                        </label>
                         <label class="qsh-wide-field">
-                            <span>初始模型 ID</span>
-                            <textarea id="qsh-models" class="text_pole" rows="3" placeholder="每行一个，或用逗号隔开\n例如：a/gemini-3.8-flash" required></textarea>
+                            <span>手动输入模型 ID（拉取失败时使用）</span>
+                            <textarea id="qsh-models" class="text_pole" rows="3" placeholder="每行一个，或用逗号隔开\n例如：a/gemini-3.8-flash"></textarea>
                         </label>
                     </div>
                     <label class="qsh-check-row">
@@ -1386,6 +1609,8 @@ function updateLauncherVisibility() {
 function bindUi() {
     document.getElementById('qsh-show-add')?.addEventListener('click', () => showAddForm(true));
     document.getElementById('qsh-cancel-add')?.addEventListener('click', () => showAddForm(false));
+    document.getElementById('qsh-fetch-models')?.addEventListener('click', fetchModelsForAddForm);
+    document.getElementById('qsh-endpoint')?.addEventListener('input', resetFetchedModels);
     document.getElementById('qsh-add-form')?.addEventListener('submit', addStation);
     document.getElementById('qsh-cancel-edit')?.addEventListener('click', hideEditStationForm);
     document.getElementById('qsh-edit-form')?.addEventListener('submit', editStation);

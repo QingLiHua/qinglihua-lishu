@@ -254,6 +254,22 @@ body.qsh-modal-open { overflow: hidden; }
 .qsh-form-grid label > span { color: #526177; font-size: .8rem; font-weight: 650; }
 .qsh-form-grid .qsh-wide-field { grid-column: 1 / -1; }
 
+.qsh-model-fetch-row {
+    align-items: center;
+    background: rgba(255, 255, 255, .58);
+    border: 1px dashed #c7d5e7;
+    border-radius: 11px;
+    display: flex;
+    gap: 10px;
+    padding: 10px;
+}
+.qsh-model-fetch-row > span {
+    color: var(--qsh-muted);
+    font-size: .72rem;
+    line-height: 1.45;
+}
+.qsh-fetch-models-button { flex: 0 0 auto; }
+
 .qsh-dialog .text_pole,
 .qsh-dialog input.text_pole,
 .qsh-dialog textarea.text_pole,
@@ -437,6 +453,8 @@ body.qsh-modal-open { overflow: hidden; }
     .qsh-dialog.qsh-editor-open .qsh-add-form { max-height: none; }
     .qsh-form-grid { grid-template-columns: 1fr; }
     .qsh-form-grid .qsh-wide-field { grid-column: auto; }
+    .qsh-model-fetch-row { align-items: stretch; flex-direction: column; }
+    .qsh-fetch-models-button { width: 100%; }
     .qsh-editor-open .qsh-form-actions { display: grid; grid-template-columns: 1fr 1fr; }
     .qsh-editor-open .qsh-form-actions > button { min-width: 0; width: 100%; }
     .qsh-subdialog-backdrop { align-items: flex-end; padding: 18px 16px max(18px, env(safe-area-inset-bottom)); }
